@@ -1,10 +1,17 @@
-export default function (otherWindow, requestHandlers) {
-  console.log('Regisrering protocol', otherWindow, requestHandlers)
+const registeredProtocols = {}
+export default function (otherWindow, requestHandlers, identifier, logger) {
+  if(!logger) {
+    logger = emptyLogger()
+  }
+  if(registeredProtocols[identifier]) {
+    logger.warn(`postmessagecomm ${identifier} is already registered. Trying to register it again?`)
+    return registeredProtocols[identifier]
+  }
+
   function postMessage(type, obj) {
-    otherWindow.postMessage(Object.assign({
-      webtopcall: true,
-      type
-    }, obj), '*')
+    const msg = Object.assign({type}, obj)
+    msg[identifier] = true
+    otherWindow.postMessage(msg, '*')
   }
 
   let callId = 100
@@ -14,62 +21,66 @@ export default function (otherWindow, requestHandlers) {
     // empty initially
   }
   window.addEventListener('message', (e) => {
-    if (!e.data && !e.data.webtopcall) {
-      // ignore other messages
-      return
-    }
+    // ignore other messages
+    if(!e.data) { return; }
+    if (!e.data[identifier]) { return; }
+    logger.debug(`Recieved ${identifier} message`, e)
     if (e.data.type === 'request') {
       const method = e.data.method
       const id = e.data.id
       const args = e.data.args
-      // TODO: check for method existance...
       if (typeof requestHandlers[method] === 'function') {
         const returnValue = args ? requestHandlers[method](...args) : requestHandlers[method]()
         // if returnValue is promise => wait to be resolved before call postMessage
         Promise.resolve(returnValue)
-          .then((value) => {
-            const resp = {
-              id,
-              returnValue: value
-            }
-            console.log('Sending response', resp)
-            postMessage('response', resp)
-          })
+        .then((value) => {
+          const resp = {
+            id,
+            returnValue: value
+          }
+          logger.debug('Sending response', resp)
+          postMessage('response', resp)
+        })
       } else {
-        console.warn('no method found', method)
+        logger.warn('no method found', method)
       }
     } else if (e.data.type === 'response') {
       if (listenerMap[e.data.id]) {
         listenerMap[e.data.id](e.data.returnValue)
         delete listenerMap[e.data.id]
       } else {
-        console.warn('No handler for response', e.data)
+        logger.warn('No handler for response', e.data)
       }
-    } else if (e.data.type === 'editor-event') {
+    } else if (e.data.type === 'event') {
       // calling all listeners
       listeners.map(cb => cb(e.data.event))
     } else {
-      console.warn('Recieved unknown message type', e.data.type, e.data)
+      logger.warn('Recieved unknown message type', e.data.type, e.data)
     }
   })
-  return {
-    // TODO: unregister
+  logger.info('Regisrering protocol', identifier, otherWindow, requestHandlers)
+  const rv = {
+    sendEvent(data) {
+      postMessage('event', data)
+    },
     onEvent(callback) {
       if (callback && typeof callback === 'function') {
         listeners.push(callback)
       } else {
-        console.warn('passed non function callback in onEvent', callback)
+        logger.warn('passed non function callback in onEvent', callback)
       }
     },
     createCall(method) {
       return function clientCall(...args) {
         const id = callId
         callId += 1
-        postMessage('request', {
+        const req = {
           id,
           method,
           args
-        })
+        }
+        logger.info('Sending request', req)
+        postMessage('request', req)
         return new Promise((success) => {
           listenerMap[id] = (data) => {
             success(data)
@@ -77,5 +88,16 @@ export default function (otherWindow, requestHandlers) {
         })
       }
     }
+  }
+  registeredProtocols[identifier] = rv
+  return rv
+}
+
+function emptyLogger() {
+  const emptyFn = () => {}
+  return {
+    warn: emptyFn,
+    info: emptyFn,
+    debug: emptyFn,
   }
 }
