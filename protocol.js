@@ -1,4 +1,4 @@
-const registeredProtocols = {}
+let registeredProtocols = {}
 export default function (otherWindow, requestHandlers, identifier, logger) {
   if(!logger) {
     logger = emptyLogger()
@@ -14,13 +14,14 @@ export default function (otherWindow, requestHandlers, identifier, logger) {
     otherWindow.postMessage(msg, '*')
   }
 
+  let messageListener = undefined
   let callId = 100
   const listeners = []
   const listenerMap = {
     // listeners for reponses
     // empty initially
   }
-  window.addEventListener('message', (e) => {
+  messageListener = window.addEventListener('message', (e) => {
     // ignore other messages
     if(!e.data) { return; }
     if (!e.data[identifier]) { return; }
@@ -87,6 +88,10 @@ export default function (otherWindow, requestHandlers, identifier, logger) {
           }
         })
       }
+    },
+    destroy() {
+      registeredProtocols = {}
+      window.removeEventListener('message', messageListener)
     }
   }
   registeredProtocols[identifier] = rv
